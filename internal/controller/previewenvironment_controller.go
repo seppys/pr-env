@@ -1,0 +1,120 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+	"fmt"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/seppys/pr-env/api/v1alpha1"
+	previewv1alpha1 "github.com/seppys/pr-env/api/v1alpha1"
+)
+
+// PreviewEnvironmentReconciler reconciles a PreviewEnvironment object
+type PreviewEnvironmentReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+}
+
+const (
+	desiredReplicas int32  = 1
+	selectorLabel   string = "app.kubernetes.io/instance"
+)
+
+// +kubebuilder:rbac:groups=preview.seppys.dev,resources=previewenvironments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=preview.seppys.dev,resources=previewenvironments/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=preview.seppys.dev,resources=previewenvironments/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;delete
+
+func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	environment := &v1alpha1.PreviewEnvironment{}
+	if err := r.Get(ctx, req.NamespacedName, environment); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: environment.Namespace}}
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+
+		dep.Spec.Replicas = ptr.To(desiredReplicas)
+
+		if dep.CreationTimestamp.IsZero() {
+			labels := map[string]string{selectorLabel: environment.Name}
+			dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+			dep.Spec.Template.Labels = labels
+		}
+
+		if len(dep.Spec.Template.Spec.Containers) == 0 {
+			dep.Spec.Template.Spec.Containers = append(dep.Spec.Template.Spec.Containers, corev1.Container{Name: "app"})
+		}
+		c := &dep.Spec.Template.Spec.Containers[0]
+		c.Image = environment.Spec.Image
+		c.Ports = []corev1.ContainerPort{{
+			Name:          "http",
+			ContainerPort: environment.Spec.Port,
+			Protocol:      corev1.ProtocolTCP,
+		}}
+
+		return controllerutil.SetControllerReference(environment, dep, r.Scheme)
+	})
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling Deployment: %w", err)
+	}
+	if op != controllerutil.OperationResultNone {
+		log.Info("Reconciled Deployment", "name", dep.Name, "operation", op)
+	}
+
+	cond := metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		Reason:             "DeploymentNotAvailable",
+		ObservedGeneration: environment.Generation,
+	}
+	if dep.Status.AvailableReplicas == desiredReplicas {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "DeploymentAvailable"
+	}
+
+	meta.SetStatusCondition(&environment.Status.Conditions, cond)
+
+	if err := r.Status().Update(ctx, environment); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *PreviewEnvironmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&previewv1alpha1.PreviewEnvironment{}).
+		Owns(&appsv1.Deployment{}).
+		Named("previewenvironment").
+		Complete(r)
+}
