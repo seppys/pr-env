@@ -155,6 +155,43 @@ var _ = Describe("setReady", func() {
 		})
 	})
 
+	Describe("DeployedCommitSHA", func() {
+		ready := rollout{generation: 1, observedGeneration: 1, replicas: 1, updated: 1, available: 1}
+		inProgress := rollout{generation: 1, observedGeneration: 1, replicas: 2, updated: 1, available: 1}
+		const (
+			oldSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			newSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		)
+
+		envWithSHAs := func() *previewv1alpha1.PreviewEnvironment {
+			env := newEnvironment()
+			env.Spec.CommitSHA = newSHA
+			env.Status.DeployedCommitSHA = oldSHA
+			return env
+		}
+
+		It("is set to the requested commit once Ready", func() {
+			env := envWithSHAs()
+			setReady(env, newDeployment(ready), withAddress)
+
+			Expect(env.Status.DeployedCommitSHA).To(Equal(newSHA))
+		})
+
+		It("keeps the previous commit while the rollout is in progress", func() {
+			env := envWithSHAs()
+			setReady(env, newDeployment(inProgress), withAddress)
+
+			Expect(env.Status.DeployedCommitSHA).To(Equal(oldSHA))
+		})
+
+		It("keeps the previous commit while the Ingress has no address", func() {
+			env := envWithSHAs()
+			setReady(env, newDeployment(ready), newIngress(""))
+
+			Expect(env.Status.DeployedCommitSHA).To(Equal(oldSHA))
+		})
+	})
+
 	Describe("LastTransitionTime", func() {
 		ready := rollout{generation: 1, observedGeneration: 1, replicas: 1, updated: 1, available: 1}
 		inProgress := rollout{generation: 1, observedGeneration: 1, replicas: 1, updated: 0, available: 1}

@@ -87,6 +87,9 @@ func setReady(env *previewv1alpha1.PreviewEnvironment, dep *appsv1.Deployment, i
 			"Waiting for the ingress controller to assign the Ingress an address"
 	}
 
+	if status == metav1.ConditionTrue {
+		env.Status.DeployedCommitSHA = env.Spec.CommitSHA
+	}
 	setReadyCondition(env, status, reason, message)
 }
 

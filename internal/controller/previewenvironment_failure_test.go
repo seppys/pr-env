@@ -80,6 +80,8 @@ var _ = Describe("PreviewEnvironment Controller failures", func() {
 				Repository: testRepository,
 				Image:      testImage,
 				Port:       80,
+				PRNumber:   testPRNumber,
+				CommitSHA:  testCommitSHA,
 			},
 		})).To(Succeed())
 

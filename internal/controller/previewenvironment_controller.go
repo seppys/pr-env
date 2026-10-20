@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -98,7 +97,7 @@ func (r *PreviewEnvironmentReconciler) reconcileDeployment(
 
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: environment.Namespace}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-		dep.Spec.Replicas = ptr.To(desiredReplicas)
+		dep.Spec.Replicas = new(desiredReplicas)
 
 		if dep.CreationTimestamp.IsZero() {
 			dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
@@ -193,10 +192,11 @@ func (r *PreviewEnvironmentReconciler) reconcileIngress(
 	return ing, nil
 }
 
-// previewHost is the hostname the preview is served on. The name must be a valid DNS label
-// (at most 63 characters); otherwise the API server rejects the Ingress.
+// previewHost is the hostname the preview is served on: <prNumber>-<name>.<PreviewDomain>.
+// The first label must be a valid DNS label (at most 63 characters); otherwise the API server
+// rejects the Ingress.
 func (r *PreviewEnvironmentReconciler) previewHost(environment *previewv1alpha1.PreviewEnvironment) string {
-	return environment.Name + "." + r.PreviewDomain
+	return fmt.Sprintf("%d-%s.%s", environment.Spec.PRNumber, environment.Name, r.PreviewDomain)
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -29,8 +29,10 @@ import (
 
 // Valid spec values shared by the tests in this package.
 const (
-	testRepository = "seppys/pr-env"
-	testImage      = "nginx:1.27"
+	testRepository       = "seppys/pr-env"
+	testImage            = "nginx:1.27"
+	testPRNumber   int32 = 12
+	testCommitSHA        = "0123456789abcdef0123456789abcdef01234567"
 )
 
 // These tests exercise the OpenAPI validation generated from the markers in
@@ -44,6 +46,8 @@ var _ = Describe("PreviewEnvironment API validation", func() {
 			Repository: testRepository,
 			Image:      testImage,
 			Port:       8080,
+			PRNumber:   testPRNumber,
+			CommitSHA:  testCommitSHA,
 		}
 	}
 
@@ -85,6 +89,72 @@ var _ = Describe("PreviewEnvironment API validation", func() {
 		Entry("rejects values above 65535", int32(65536), false),
 	)
 
+	DescribeTable("prNumber",
+		func(prNumber int32, shouldSucceed bool) {
+			spec := validSpec()
+			spec.PRNumber = prNumber
+
+			err := dryRunCreate(newPreviewEnvironment(spec))
+			if shouldSucceed {
+				Expect(err).NotTo(HaveOccurred())
+				return
+			}
+			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected an Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring("spec.prNumber"))
+		},
+		Entry("accepts the lower bound", int32(1), true),
+		Entry("rejects zero", int32(0), false),
+		Entry("rejects negative values", int32(-1), false),
+	)
+
+	DescribeTable("commitSHA",
+		func(sha string, shouldSucceed bool) {
+			spec := validSpec()
+			spec.CommitSHA = sha
+
+			err := dryRunCreate(newPreviewEnvironment(spec))
+			if shouldSucceed {
+				Expect(err).NotTo(HaveOccurred())
+				return
+			}
+			Expect(errors.IsInvalid(err)).To(BeTrue(), "expected an Invalid error, got: %v", err)
+			Expect(err.Error()).To(ContainSubstring("spec.commitSHA"))
+		},
+		Entry("accepts a full lowercase SHA", testCommitSHA, true),
+		Entry("rejects an empty SHA", "", false),
+		Entry("rejects a short SHA", "0123456", false),
+		Entry("rejects an uppercase SHA", "0123456789ABCDEF0123456789ABCDEF01234567", false),
+		Entry("rejects a SHA longer than 40 characters", testCommitSHA+"8", false),
+		Entry("rejects non-hex characters", "g123456789abcdef0123456789abcdef01234567", false),
+	)
+
+	// Transition rules (self == oldSelf) only run on updates, so this needs a persisted object.
+	It("rejects changing prNumber after creation", func() {
+		env := newPreviewEnvironment(validSpec())
+		env.Name = "immutability-test"
+		Expect(k8sClient.Create(ctx, env)).To(Succeed())
+		DeferCleanup(func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, env))).To(Succeed())
+		})
+
+		env.Spec.PRNumber = testPRNumber + 1
+		err := k8sClient.Update(ctx, env, client.DryRunAll)
+		Expect(errors.IsInvalid(err)).To(BeTrue(), "expected an Invalid error, got: %v", err)
+		Expect(err.Error()).To(ContainSubstring("prNumber is immutable"))
+	})
+
+	It("allows changing commitSHA after creation", func() {
+		env := newPreviewEnvironment(validSpec())
+		env.Name = "mutable-sha-test"
+		Expect(k8sClient.Create(ctx, env)).To(Succeed())
+		DeferCleanup(func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, env))).To(Succeed())
+		})
+
+		env.Spec.CommitSHA = "fedcba9876543210fedcba9876543210fedcba98"
+		Expect(k8sClient.Update(ctx, env, client.DryRunAll)).To(Succeed())
+	})
+
 	// The typed struct always serializes every field (none use omitempty), so it can't
 	// express a missing field. An unstructured object lets us drop the key entirely.
 	DescribeTable("required fields",
@@ -93,6 +163,8 @@ var _ = Describe("PreviewEnvironment API validation", func() {
 				"repository": testRepository,
 				"image":      testImage,
 				"port":       int64(8080),
+				"prNumber":   int64(testPRNumber),
+				"commitSHA":  testCommitSHA,
 			}
 			delete(spec, field)
 
@@ -114,5 +186,7 @@ var _ = Describe("PreviewEnvironment API validation", func() {
 		Entry("rejects a missing repository", "repository"),
 		Entry("rejects a missing image", "image"),
 		Entry("rejects a missing port", "port"),
+		Entry("rejects a missing prNumber", "prNumber"),
+		Entry("rejects a missing commitSHA", "commitSHA"),
 	)
 })

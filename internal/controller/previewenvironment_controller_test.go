@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -59,6 +60,8 @@ var _ = Describe("PreviewEnvironment Controller", func() {
 						Repository: testRepository,
 						Image:      testImage,
 						Port:       8080,
+						PRNumber:   testPRNumber,
+						CommitSHA:  testCommitSHA,
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -89,11 +92,11 @@ var _ = Describe("PreviewEnvironment Controller", func() {
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
 
-			By("Routing <name>.<preview domain> to the Service")
+			By("Routing <prNumber>-<name>.<preview domain> to the Service")
 			ing := &networkingv1.Ingress{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, ing)).To(Succeed())
 			Expect(ing.Spec.Rules).To(HaveLen(1))
-			Expect(ing.Spec.Rules[0].Host).To(Equal(resourceName + ".preview.local"))
+			Expect(ing.Spec.Rules[0].Host).To(Equal(fmt.Sprintf("%d-%s.preview.local", testPRNumber, resourceName)))
 			paths := ing.Spec.Rules[0].HTTP.Paths
 			Expect(paths).To(HaveLen(1))
 			Expect(paths[0].Path).To(Equal("/"))

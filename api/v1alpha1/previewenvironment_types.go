@@ -37,9 +37,18 @@ type PreviewEnvironmentSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port"`
+	// GitHub PR number this environment previews
+	// +required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="prNumber is immutable"
+	PRNumber int32 `json:"prNumber"`
+	// PR head commit the image was built from, as a full 40-character lowercase SHA
+	// +required
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{40}$`
+	CommitSHA string `json:"commitSHA"`
 }
 
-// PreviewEnvironmentStatus defi nes the observed state of PreviewEnvironment.
+// PreviewEnvironmentStatus defines the observed state of PreviewEnvironment.
 type PreviewEnvironmentStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
@@ -63,6 +72,9 @@ type PreviewEnvironmentStatus struct {
 	// The URL running the environment
 	// +optional
 	URL string `json:"url,omitempty"`
+	// PR commit currently served, set once its rollout completes
+	// +optional
+	DeployedCommitSHA string `json:"deployedCommitSHA,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -71,6 +83,8 @@ type PreviewEnvironmentStatus struct {
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`,priority=1
 // +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.status.url`
+// +kubebuilder:printcolumn:name="PR",type=integer,JSONPath=`.spec.prNumber`
+// +kubebuilder:printcolumn:name="Commit",type=string,JSONPath=`.status.deployedCommitSHA`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // PreviewEnvironment is the Schema for the previewenvironments API

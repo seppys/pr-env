@@ -27,6 +27,13 @@ spec:
     - jsonPath: .status.url
       name: URL
       type: string
+    - jsonPath: .spec.prNumber
+      name: PR
+      type: integer
+    - jsonPath: .status.deployedCommitSHA
+      name: Commit
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -56,6 +63,11 @@ spec:
           spec:
             description: spec defines the desired state of PreviewEnvironment
             properties:
+              commitSHA:
+                description: PR head commit the image was built from, as a full 40-character
+                  lowercase SHA
+                pattern: ^[0-9a-f]{40}$
+                type: string
               image:
                 description: Image of the application
                 type: string
@@ -65,12 +77,22 @@ spec:
                 maximum: 65535
                 minimum: 1
                 type: integer
+              prNumber:
+                description: GitHub PR number this environment previews
+                format: int32
+                minimum: 1
+                type: integer
+                x-kubernetes-validations:
+                - message: prNumber is immutable
+                  rule: self == oldSelf
               repository:
                 description: The project's repository where the PR is
                 type: string
             required:
+            - commitSHA
             - image
             - port
+            - prNumber
             - repository
             type: object
           status:
@@ -145,6 +167,9 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              deployedCommitSHA:
+                description: PR commit currently served, set once its rollout completes
+                type: string
               url:
                 description: The URL running the environment
                 type: string
