@@ -27,6 +27,12 @@ import (
 	previewv1alpha1 "github.com/seppys/pr-env/api/v1alpha1"
 )
 
+// Valid spec values shared by the tests in this package.
+const (
+	testRepository = "seppys/pr-env"
+	testImage      = "nginx:1.27"
+)
+
 // These tests exercise the OpenAPI validation generated from the markers in
 // previewenvironment_types.go. Every create is a server-side dry run: the API
 // server fully validates the object but never persists it, so no cleanup is needed.
@@ -35,8 +41,8 @@ var _ = Describe("PreviewEnvironment API validation", func() {
 
 	validSpec := func() previewv1alpha1.PreviewEnvironmentSpec {
 		return previewv1alpha1.PreviewEnvironmentSpec{
-			Repository: "seppys/pr-env",
-			Image:      "nginx:1.27",
+			Repository: testRepository,
+			Image:      testImage,
 			Port:       8080,
 		}
 	}
@@ -84,8 +90,8 @@ var _ = Describe("PreviewEnvironment API validation", func() {
 	DescribeTable("required fields",
 		func(field string) {
 			spec := map[string]any{
-				"repository": "seppys/pr-env",
-				"image":      "nginx:1.27",
+				"repository": testRepository,
+				"image":      testImage,
 				"port":       int64(8080),
 			}
 			delete(spec, field)

@@ -55,8 +55,8 @@ var _ = Describe("PreviewEnvironment Controller", func() {
 						Namespace: resourceNamespace,
 					},
 					Spec: previewv1alpha1.PreviewEnvironmentSpec{
-						Repository: "seppys/pr-env",
-						Image:      "nginx:1.27",
+						Repository: testRepository,
+						Image:      testImage,
 						Port:       8080,
 					},
 				}
