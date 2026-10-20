@@ -17,12 +17,15 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	previewv1alpha1 "github.com/seppys/pr-env/api/v1alpha1"
 )
@@ -49,6 +52,19 @@ func setReadyCondition(env *previewv1alpha1.PreviewEnvironment, status metav1.Co
 		Message:            message,
 		ObservedGeneration: env.Generation,
 	})
+}
+
+// failReconcile marks env as not Ready because reconciling a child resource failed, writes the
+// status, and returns reconcileErr so controller-runtime retries with backoff. A failed status
+// write is only logged: reconcileErr is the more useful error to surface and retry on.
+func (r *PreviewEnvironmentReconciler) failReconcile(
+	ctx context.Context, env *previewv1alpha1.PreviewEnvironment, reason string, reconcileErr error,
+) (ctrl.Result, error) {
+	setReadyCondition(env, metav1.ConditionFalse, reason, reconcileErr.Error())
+	if err := r.Status().Update(ctx, env); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to update PreviewEnvironment status")
+	}
+	return ctrl.Result{}, reconcileErr
 }
 
 // setReadyFromDeployment derives the Ready condition from the Deployment's rollout state.

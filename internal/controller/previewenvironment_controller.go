@@ -61,11 +61,11 @@ func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	dep, err := r.reconcileDeployment(ctx, environment, labels)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.failReconcile(ctx, environment, ReasonDeploymentReconcileFailed, err)
 	}
 
 	if err := r.reconcileService(ctx, environment, labels); err != nil {
-		return ctrl.Result{}, err
+		return r.failReconcile(ctx, environment, ReasonServiceReconcileFailed, err)
 	}
 
 	setReadyFromDeployment(environment, dep)
