@@ -17,65 +17,32 @@ limitations under the License.
 package controller
 
 import (
-	"errors"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	previewv1alpha1 "github.com/seppys/pr-env/api/v1alpha1"
 )
 
 var _ = Describe("PreviewEnvironment Controller failures", func() {
-	const (
-		name      = "collision-test"
-		namespace = "default"
-	)
-	key := types.NamespacedName{Name: name, Namespace: namespace}
-	objectMeta := metav1.ObjectMeta{Name: name, Namespace: namespace}
+	// The PreviewEnvironment and the pre-existing namespace share a name, which is the collision.
+	const name = "collision-test"
+	key := types.NamespacedName{Name: name, Namespace: testNamespace}
 
-	AfterEach(func() {
-		// envtest has no garbage collector, so owned children must be deleted explicitly too.
-		for _, obj := range []client.Object{
-			&previewv1alpha1.PreviewEnvironment{ObjectMeta: objectMeta},
-			&appsv1.Deployment{ObjectMeta: objectMeta},
-			&corev1.Service{ObjectMeta: objectMeta},
-			&networkingv1.Ingress{ObjectMeta: objectMeta},
-		} {
-			err := k8sClient.Delete(ctx, obj)
-			Expect(apierrors.IsNotFound(err) || err == nil).To(BeTrue(), "deleting %T: %v", obj, err)
-		}
-	})
+	AfterEach(func() { removeFinalizerAndDelete(ctx, key) })
 
-	It("reports ServiceReconcileFailed when a Service with the same name is controlled by someone else", func() {
-		By("creating a Service that another controller already owns")
-		Expect(k8sClient.Create(ctx, &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: namespace,
-				OwnerReferences: []metav1.OwnerReference{{
-					APIVersion: "v1",
-					Kind:       "ConfigMap",
-					Name:       "someone-else",
-					UID:        "00000000-0000-0000-0000-000000000001",
-					Controller: new(true),
-				}},
-			},
-			Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
-		})).To(Succeed())
+	It("refuses to adopt a namespace it didn't create and reports NamespaceReconcileFailed", func() {
+		By("creating a namespace without owner labels")
+		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})).To(Succeed())
 
 		By("creating the PreviewEnvironment")
 		Expect(k8sClient.Create(ctx, &previewv1alpha1.PreviewEnvironment{
-			ObjectMeta: objectMeta,
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
 			Spec: previewv1alpha1.PreviewEnvironmentSpec{
 				Repository: testRepository,
 				Image:      testImage,
@@ -92,8 +59,7 @@ var _ = Describe("PreviewEnvironment Controller failures", func() {
 		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 
 		By("returning the error so controller-runtime retries")
-		var alreadyOwned *controllerutil.AlreadyOwnedError
-		Expect(errors.As(err, &alreadyOwned)).To(BeTrue(), "expected an AlreadyOwnedError, got: %v", err)
+		Expect(err).To(MatchError(ContainSubstring("not managed by this PreviewEnvironment")))
 
 		By("recording the failure on the Ready condition")
 		env := &previewv1alpha1.PreviewEnvironment{}
@@ -101,7 +67,16 @@ var _ = Describe("PreviewEnvironment Controller failures", func() {
 		cond := meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady)
 		Expect(cond).NotTo(BeNil())
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-		Expect(cond.Reason).To(Equal(ReasonServiceReconcileFailed))
-		Expect(cond.Message).To(ContainSubstring("reconciling Service"))
+		Expect(cond.Reason).To(Equal(ReasonNamespaceReconcileFailed))
+
+		By("leaving the foreign namespace alone when the PreviewEnvironment is deleted")
+		Expect(k8sClient.Delete(ctx, env)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		ns := &corev1.Namespace{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: name}, ns)).To(Succeed())
+		Expect(ns.DeletionTimestamp.IsZero()).To(BeTrue(), "the foreign namespace must not be deleted")
+		Expect(k8sClient.Get(ctx, key, env)).NotTo(Succeed(), "the finalizer should be removed so deletion completes")
 	})
 })

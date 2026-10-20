@@ -33,13 +33,14 @@ const (
 	testImage            = "nginx:1.27"
 	testPRNumber   int32 = 12
 	testCommitSHA        = "0123456789abcdef0123456789abcdef01234567"
+	testNamespace        = "default"
 )
 
 // These tests exercise the OpenAPI validation generated from the markers in
 // previewenvironment_types.go. Every create is a server-side dry run: the API
 // server fully validates the object but never persists it, so no cleanup is needed.
 var _ = Describe("PreviewEnvironment API validation", func() {
-	const namespace = "default"
+	const namespace = testNamespace
 
 	validSpec := func() previewv1alpha1.PreviewEnvironmentSpec {
 		return previewv1alpha1.PreviewEnvironmentSpec{

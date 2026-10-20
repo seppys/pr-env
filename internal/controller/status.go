@@ -39,7 +39,7 @@ const (
 	ReasonAvailable                 = "Available"
 	ReasonRolloutInProgress         = "RolloutInProgress"
 	ReasonRolloutFailed             = "RolloutFailed"
-	ReasonNamespaceReconcileFailed  = "NamespaceReconcileFailer"
+	ReasonNamespaceReconcileFailed  = "NamespaceReconcileFailed"
 	ReasonDeploymentReconcileFailed = "DeploymentReconcileFailed"
 	ReasonServiceReconcileFailed    = "ServiceReconcileFailed"
 	ReasonIngressReconcileFailed    = "IngressReconcileFailed"
