@@ -11,13 +11,25 @@ spec:
     kind: PreviewEnvironment
     listKind: PreviewEnvironmentList
     plural: previewenvironments
+    shortNames:
+    - pe
     singular: previewenvironment
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.url
-      name: Url
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .status.url
+      name: URL
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
