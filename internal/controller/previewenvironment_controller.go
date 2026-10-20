@@ -22,9 +22,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -50,6 +50,7 @@ const (
 // +kubebuilder:rbac:groups=preview.seppys.dev,resources=previewenvironments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=preview.seppys.dev,resources=previewenvironments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 
 func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -59,13 +60,14 @@ func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	labels := map[string]string{selectorLabel: environment.Name}
+
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: environment.Namespace}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 
 		dep.Spec.Replicas = ptr.To(desiredReplicas)
 
 		if dep.CreationTimestamp.IsZero() {
-			labels := map[string]string{selectorLabel: environment.Name}
 			dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 			dep.Spec.Template.Labels = labels
 		}
@@ -90,18 +92,28 @@ func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.R
 		log.Info("Reconciled Deployment", "name", dep.Name, "operation", op)
 	}
 
-	cond := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "DeploymentNotAvailable",
-		ObservedGeneration: environment.Generation,
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: environment.Namespace}}
+	op, err = controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+
+		svc.Spec.Type = corev1.ServiceTypeClusterIP
+		svc.Spec.Selector = labels
+		svc.Spec.Ports = []corev1.ServicePort{{
+			Name:       "http",
+			Port:       80,
+			TargetPort: intstr.FromString("http"),
+			Protocol:   corev1.ProtocolTCP,
+		}}
+
+		return controllerutil.SetControllerReference(environment, svc, r.Scheme)
+	})
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling Service: %w", err)
 	}
-	if dep.Status.AvailableReplicas == desiredReplicas {
-		cond.Status = metav1.ConditionTrue
-		cond.Reason = "DeploymentAvailable"
+	if op != controllerutil.OperationResultNone {
+		log.Info("Reconciled Service", "name", svc.Name, "operation", op)
 	}
 
-	meta.SetStatusCondition(&environment.Status.Conditions, cond)
+	setReadyFromDeployment(environment, dep)
 
 	if err := r.Status().Update(ctx, environment); err != nil {
 		return ctrl.Result{}, err
@@ -115,6 +127,7 @@ func (r *PreviewEnvironmentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&previewv1alpha1.PreviewEnvironment{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
 		Named("previewenvironment").
 		Complete(r)
 }
