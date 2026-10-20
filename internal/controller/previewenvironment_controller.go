@@ -58,6 +58,7 @@ const (
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;delete
 
 func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	environment := &previewv1alpha1.PreviewEnvironment{}
@@ -67,16 +68,21 @@ func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	labels := map[string]string{selectorLabel: environment.Name}
 
-	dep, err := r.reconcileDeployment(ctx, environment, labels)
+	ns, err := r.reconcileNamespace(ctx, environment)
+	if err != nil {
+		return r.failReconcile(ctx, environment, ReasonNamespaceReconcileFailed, err)
+	}
+
+	dep, err := r.reconcileDeployment(ctx, environment, labels, ns)
 	if err != nil {
 		return r.failReconcile(ctx, environment, ReasonDeploymentReconcileFailed, err)
 	}
 
-	if err := r.reconcileService(ctx, environment, labels); err != nil {
+	if err := r.reconcileService(ctx, environment, labels, ns); err != nil {
 		return r.failReconcile(ctx, environment, ReasonServiceReconcileFailed, err)
 	}
 
-	ing, err := r.reconcileIngress(ctx, environment)
+	ing, err := r.reconcileIngress(ctx, environment, ns)
 	if err != nil {
 		return r.failReconcile(ctx, environment, ReasonIngressReconcileFailed, err)
 	}
@@ -90,12 +96,33 @@ func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.R
 	return ctrl.Result{}, nil
 }
 
+func (r *PreviewEnvironmentReconciler) reconcileNamespace(
+	ctx context.Context, environment *previewv1alpha1.PreviewEnvironment,
+) (*corev1.Namespace, error) {
+	log := logf.FromContext(ctx)
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: environment.Name}}
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
+		ns.Name = environment.Name
+
+		return controllerutil.SetControllerReference(environment, ns, r.Scheme)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reconciling Namespace: %w", err)
+	}
+	if op != controllerutil.OperationResultNone {
+		log.Info("Reconciled Namespace", "namespace", ns.Name, "operation", op)
+	}
+
+	return ns, nil
+}
+
 func (r *PreviewEnvironmentReconciler) reconcileDeployment(
-	ctx context.Context, environment *previewv1alpha1.PreviewEnvironment, labels map[string]string,
+	ctx context.Context, environment *previewv1alpha1.PreviewEnvironment, labels map[string]string, ns *corev1.Namespace,
 ) (*appsv1.Deployment, error) {
 	log := logf.FromContext(ctx)
 
-	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: environment.Namespace}}
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: ns.Name}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		dep.Spec.Replicas = new(desiredReplicas)
 
@@ -128,11 +155,11 @@ func (r *PreviewEnvironmentReconciler) reconcileDeployment(
 }
 
 func (r *PreviewEnvironmentReconciler) reconcileService(
-	ctx context.Context, environment *previewv1alpha1.PreviewEnvironment, labels map[string]string,
+	ctx context.Context, environment *previewv1alpha1.PreviewEnvironment, labels map[string]string, ns *corev1.Namespace,
 ) error {
 	log := logf.FromContext(ctx)
 
-	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: environment.Namespace}}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: ns.Name}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		svc.Spec.Type = corev1.ServiceTypeClusterIP
 		svc.Spec.Selector = labels
@@ -156,11 +183,11 @@ func (r *PreviewEnvironmentReconciler) reconcileService(
 }
 
 func (r *PreviewEnvironmentReconciler) reconcileIngress(
-	ctx context.Context, environment *previewv1alpha1.PreviewEnvironment,
+	ctx context.Context, environment *previewv1alpha1.PreviewEnvironment, ns *corev1.Namespace,
 ) (*networkingv1.Ingress, error) {
 	log := logf.FromContext(ctx)
 
-	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: environment.Namespace}}
+	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: ns.Name}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
 		// Left untouched when unset, so the API server's default IngressClass isn't overwritten.
 		if r.IngressClassName != "" {
