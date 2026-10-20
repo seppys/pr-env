@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,6 +49,7 @@ var _ = Describe("PreviewEnvironment Controller failures", func() {
 			&previewv1alpha1.PreviewEnvironment{ObjectMeta: objectMeta},
 			&appsv1.Deployment{ObjectMeta: objectMeta},
 			&corev1.Service{ObjectMeta: objectMeta},
+			&networkingv1.Ingress{ObjectMeta: objectMeta},
 		} {
 			err := k8sClient.Delete(ctx, obj)
 			Expect(apierrors.IsNotFound(err) || err == nil).To(BeTrue(), "deleting %T: %v", obj, err)
@@ -82,7 +84,9 @@ var _ = Describe("PreviewEnvironment Controller failures", func() {
 		})).To(Succeed())
 
 		By("reconciling")
-		reconciler := &PreviewEnvironmentReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		reconciler := &PreviewEnvironmentReconciler{
+			Client: k8sClient, Scheme: k8sClient.Scheme(), PreviewDomain: "preview.local",
+		}
 		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 
 		By("returning the error so controller-runtime retries")

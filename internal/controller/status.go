@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -40,6 +41,8 @@ const (
 	ReasonRolloutFailed             = "RolloutFailed"
 	ReasonDeploymentReconcileFailed = "DeploymentReconcileFailed"
 	ReasonServiceReconcileFailed    = "ServiceReconcileFailed"
+	ReasonIngressReconcileFailed    = "IngressReconcileFailed"
+	ReasonIngressAddressPending     = "IngressAddressPending"
 )
 
 // setReadyCondition records the Ready condition on env in memory only; the caller writes the status.
@@ -67,38 +70,66 @@ func (r *PreviewEnvironmentReconciler) failReconcile(
 	return ctrl.Result{}, reconcileErr
 }
 
-// setReadyFromDeployment derives the Ready condition from the Deployment's rollout state.
-// It mirrors `kubectl rollout status`: Ready is only True once every replica runs the latest
-// pod template and is available, so a pod still serving the previous image never counts.
-func setReadyFromDeployment(env *previewv1alpha1.PreviewEnvironment, dep *appsv1.Deployment) {
+// setReady derives the Ready condition and URL from the observed children. Ready is True only
+// once the rollout is complete and the ingress controller has assigned the Ingress an address.
+// The condition is computed first and set once: setting it True and then overriding it with
+// False would look like a flip and bump LastTransitionTime on every reconcile.
+func setReady(env *previewv1alpha1.PreviewEnvironment, dep *appsv1.Deployment, ing *networkingv1.Ingress) {
+	status, reason, message := rolloutState(dep)
+
+	env.Status.URL = ""
+	if hasAddress(ing) {
+		if len(ing.Spec.Rules) > 0 {
+			env.Status.URL = "http://" + ing.Spec.Rules[0].Host
+		}
+	} else if status == metav1.ConditionTrue {
+		status, reason, message = metav1.ConditionFalse, ReasonIngressAddressPending,
+			"Waiting for the ingress controller to assign the Ingress an address"
+	}
+
+	setReadyCondition(env, status, reason, message)
+}
+
+// hasAddress reports whether an ingress controller has published an address for ing.
+func hasAddress(ing *networkingv1.Ingress) bool {
+	for _, lb := range ing.Status.LoadBalancer.Ingress {
+		if lb.IP != "" || lb.Hostname != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// rolloutState derives the Ready status, reason and message from the Deployment's rollout state.
+// It mirrors `kubectl rollout status`: the rollout is only complete once every replica runs the
+// latest pod template and is available, so a pod still serving the previous image never counts.
+func rolloutState(dep *appsv1.Deployment) (metav1.ConditionStatus, string, string) {
 	desired := ptr.Deref(dep.Spec.Replicas, 1)
 	s := dep.Status
 
 	if s.ObservedGeneration < dep.Generation {
-		setReadyCondition(env, metav1.ConditionFalse, ReasonRolloutInProgress,
-			"Waiting for the Deployment controller to observe the latest spec")
-		return
+		return metav1.ConditionFalse, ReasonRolloutInProgress,
+			"Waiting for the Deployment controller to observe the latest spec"
 	}
 
 	for _, c := range s.Conditions {
 		if c.Type == appsv1.DeploymentProgressing && c.Reason == "ProgressDeadlineExceeded" {
-			setReadyCondition(env, metav1.ConditionFalse, ReasonRolloutFailed, c.Message)
-			return
+			return metav1.ConditionFalse, ReasonRolloutFailed, c.Message
 		}
 	}
 
 	switch {
 	case s.UpdatedReplicas < desired:
-		setReadyCondition(env, metav1.ConditionFalse, ReasonRolloutInProgress,
-			fmt.Sprintf("%d/%d replicas updated", s.UpdatedReplicas, desired))
+		return metav1.ConditionFalse, ReasonRolloutInProgress,
+			fmt.Sprintf("%d/%d replicas updated", s.UpdatedReplicas, desired)
 	case s.Replicas > s.UpdatedReplicas:
-		setReadyCondition(env, metav1.ConditionFalse, ReasonRolloutInProgress,
-			fmt.Sprintf("%d old replicas pending termination", s.Replicas-s.UpdatedReplicas))
+		return metav1.ConditionFalse, ReasonRolloutInProgress,
+			fmt.Sprintf("%d old replicas pending termination", s.Replicas-s.UpdatedReplicas)
 	case s.AvailableReplicas < s.UpdatedReplicas:
-		setReadyCondition(env, metav1.ConditionFalse, ReasonRolloutInProgress,
-			fmt.Sprintf("%d/%d updated replicas available", s.AvailableReplicas, s.UpdatedReplicas))
+		return metav1.ConditionFalse, ReasonRolloutInProgress,
+			fmt.Sprintf("%d/%d updated replicas available", s.AvailableReplicas, s.UpdatedReplicas)
 	default:
-		setReadyCondition(env, metav1.ConditionTrue, ReasonAvailable,
-			fmt.Sprintf("%d/%d replicas updated and available", s.AvailableReplicas, desired))
+		return metav1.ConditionTrue, ReasonAvailable,
+			fmt.Sprintf("%d/%d replicas updated and available", s.AvailableReplicas, desired)
 	}
 }

@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -76,8 +77,9 @@ var _ = Describe("PreviewEnvironment Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &PreviewEnvironmentReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				PreviewDomain: "preview.local",
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -86,6 +88,21 @@ var _ = Describe("PreviewEnvironment Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("Routing <name>.<preview domain> to the Service")
+			ing := &networkingv1.Ingress{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, ing)).To(Succeed())
+			Expect(ing.Spec.Rules).To(HaveLen(1))
+			Expect(ing.Spec.Rules[0].Host).To(Equal(resourceName + ".preview.local"))
+			paths := ing.Spec.Rules[0].HTTP.Paths
+			Expect(paths).To(HaveLen(1))
+			Expect(paths[0].Path).To(Equal("/"))
+			Expect(paths[0].Backend.Service.Name).To(Equal(resourceName))
+			Expect(paths[0].Backend.Service.Port.Name).To(Equal("http"))
+
+			resource := &previewv1alpha1.PreviewEnvironment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, resource)).To(Succeed())
+			Expect(metav1.IsControlledBy(ing, resource)).To(BeTrue())
 		})
 	})
 })

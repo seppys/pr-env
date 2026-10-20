@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -30,10 +31,10 @@ import (
 	previewv1alpha1 "github.com/seppys/pr-env/api/v1alpha1"
 )
 
-// These are plain unit tests: setReadyFromDeployment only reads the objects it is given,
+// These are plain unit tests: setReady only reads the objects it is given,
 // so no API server is involved.
-var _ = Describe("setReadyFromDeployment", func() {
-	// rollout describes the Deployment fields setReadyFromDeployment looks at.
+var _ = Describe("setReady", func() {
+	// rollout describes the Deployment fields rolloutState looks at.
 	type rollout struct {
 		generation         int64
 		observedGeneration int64
@@ -69,10 +70,21 @@ var _ = Describe("setReadyFromDeployment", func() {
 		return &previewv1alpha1.PreviewEnvironment{ObjectMeta: metav1.ObjectMeta{Generation: 3}}
 	}
 
+	newIngress := func(address string) *networkingv1.Ingress {
+		ing := &networkingv1.Ingress{Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{Host: "app.preview.local"}},
+		}}
+		if address != "" {
+			ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{{IP: address}}
+		}
+		return ing
+	}
+	withAddress := newIngress("172.18.0.5")
+
 	DescribeTable("sets the Ready condition from the rollout state",
 		func(r rollout, wantStatus metav1.ConditionStatus, wantReason string) {
 			env := newEnvironment()
-			setReadyFromDeployment(env, newDeployment(r))
+			setReady(env, newDeployment(r), withAddress)
 
 			cond := meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady)
 			Expect(cond).NotTo(BeNil())
@@ -101,6 +113,48 @@ var _ = Describe("setReadyFromDeployment", func() {
 			metav1.ConditionTrue, ReasonAvailable),
 	)
 
+	Describe("Ingress address", func() {
+		ready := rollout{generation: 1, observedGeneration: 1, replicas: 1, updated: 1, available: 1}
+		inProgress := rollout{generation: 1, observedGeneration: 1, replicas: 1, updated: 0, available: 1}
+
+		It("is not Ready and has no URL while the Ingress has no address", func() {
+			env := newEnvironment()
+			setReady(env, newDeployment(ready), newIngress(""))
+
+			cond := meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady)
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(ReasonIngressAddressPending))
+			Expect(env.Status.URL).To(BeEmpty())
+		})
+
+		It("reports the rollout first when neither the rollout nor the address is ready", func() {
+			env := newEnvironment()
+			setReady(env, newDeployment(inProgress), newIngress(""))
+
+			cond := meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady)
+			Expect(cond.Reason).To(Equal(ReasonRolloutInProgress))
+		})
+
+		It("sets the URL from the Ingress host once it has an address", func() {
+			env := newEnvironment()
+			setReady(env, newDeployment(ready), withAddress)
+
+			Expect(env.Status.URL).To(Equal("http://app.preview.local"))
+		})
+
+		It("keeps LastTransitionTime while waiting for the address across reconciles", func() {
+			env := newEnvironment()
+			setReady(env, newDeployment(ready), newIngress(""))
+			past := metav1.NewTime(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
+			meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady).LastTransitionTime = past
+
+			setReady(env, newDeployment(ready), newIngress(""))
+
+			cond := meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady)
+			Expect(cond.LastTransitionTime).To(Equal(past))
+		})
+	})
+
 	Describe("LastTransitionTime", func() {
 		ready := rollout{generation: 1, observedGeneration: 1, replicas: 1, updated: 1, available: 1}
 		inProgress := rollout{generation: 1, observedGeneration: 1, replicas: 1, updated: 0, available: 1}
@@ -110,14 +164,14 @@ var _ = Describe("setReadyFromDeployment", func() {
 		// assertions don't depend on how much time passes between calls.
 		readyWithPastTransition := func() *previewv1alpha1.PreviewEnvironment {
 			env := newEnvironment()
-			setReadyFromDeployment(env, newDeployment(ready))
+			setReady(env, newDeployment(ready), withAddress)
 			meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady).LastTransitionTime = past
 			return env
 		}
 
 		It("is kept when the status doesn't change, so repeated reconciles don't rewrite status", func() {
 			env := readyWithPastTransition()
-			setReadyFromDeployment(env, newDeployment(ready))
+			setReady(env, newDeployment(ready), withAddress)
 
 			cond := meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady)
 			Expect(cond.LastTransitionTime).To(Equal(past))
@@ -125,7 +179,7 @@ var _ = Describe("setReadyFromDeployment", func() {
 
 		It("is updated when the status flips", func() {
 			env := readyWithPastTransition()
-			setReadyFromDeployment(env, newDeployment(inProgress))
+			setReady(env, newDeployment(inProgress), withAddress)
 
 			cond := meta.FindStatusCondition(env.Status.Conditions, conditionTypeReady)
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))

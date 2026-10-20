@@ -62,6 +62,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var previewDomain, ingressClassName string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -82,6 +83,10 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&previewDomain, "preview-domain", "preview.local",
+		"Base domain preview environments are served under, as <name>.<preview-domain>.")
+	flag.StringVar(&ingressClassName, "ingress-class", "",
+		"IngressClass set on preview Ingresses. Leave empty to use the cluster's default IngressClass.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -183,8 +188,10 @@ func main() {
 	}
 
 	if err := (&controller.PreviewEnvironmentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		PreviewDomain:    previewDomain,
+		IngressClassName: ingressClassName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "previewenvironment")
 		os.Exit(1)

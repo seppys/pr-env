@@ -22,6 +22,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -38,11 +39,18 @@ import (
 type PreviewEnvironmentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// PreviewDomain is the base domain preview hosts are created under: <name>.<PreviewDomain>.
+	PreviewDomain string
+	// IngressClassName is set on every Ingress; empty uses the cluster's default IngressClass.
+	IngressClassName string
 }
 
 const (
 	desiredReplicas int32  = 1
 	selectorLabel   string = "app.kubernetes.io/instance"
+	// httpPortName links the container port, the Service targetPort and the Ingress backend by name.
+	httpPortName string = "http"
 )
 
 // +kubebuilder:rbac:groups=preview.seppys.dev,resources=previewenvironments,verbs=get;list;watch;create;update;patch;delete
@@ -50,6 +58,7 @@ const (
 // +kubebuilder:rbac:groups=preview.seppys.dev,resources=previewenvironments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;delete
 
 func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	environment := &previewv1alpha1.PreviewEnvironment{}
@@ -68,7 +77,12 @@ func (r *PreviewEnvironmentReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return r.failReconcile(ctx, environment, ReasonServiceReconcileFailed, err)
 	}
 
-	setReadyFromDeployment(environment, dep)
+	ing, err := r.reconcileIngress(ctx, environment)
+	if err != nil {
+		return r.failReconcile(ctx, environment, ReasonIngressReconcileFailed, err)
+	}
+
+	setReady(environment, dep, ing)
 
 	if err := r.Status().Update(ctx, environment); err != nil {
 		return ctrl.Result{}, err
@@ -97,7 +111,7 @@ func (r *PreviewEnvironmentReconciler) reconcileDeployment(
 		c := &dep.Spec.Template.Spec.Containers[0]
 		c.Image = environment.Spec.Image
 		c.Ports = []corev1.ContainerPort{{
-			Name:          "http",
+			Name:          httpPortName,
 			ContainerPort: environment.Spec.Port,
 			Protocol:      corev1.ProtocolTCP,
 		}}
@@ -124,9 +138,9 @@ func (r *PreviewEnvironmentReconciler) reconcileService(
 		svc.Spec.Type = corev1.ServiceTypeClusterIP
 		svc.Spec.Selector = labels
 		svc.Spec.Ports = []corev1.ServicePort{{
-			Name:       "http",
+			Name:       httpPortName,
 			Port:       80,
-			TargetPort: intstr.FromString("http"),
+			TargetPort: intstr.FromString(httpPortName),
 			Protocol:   corev1.ProtocolTCP,
 		}}
 
@@ -142,12 +156,56 @@ func (r *PreviewEnvironmentReconciler) reconcileService(
 	return nil
 }
 
+func (r *PreviewEnvironmentReconciler) reconcileIngress(
+	ctx context.Context, environment *previewv1alpha1.PreviewEnvironment,
+) (*networkingv1.Ingress, error) {
+	log := logf.FromContext(ctx)
+
+	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: environment.Name, Namespace: environment.Namespace}}
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, ing, func() error {
+		// Left untouched when unset, so the API server's default IngressClass isn't overwritten.
+		if r.IngressClassName != "" {
+			ing.Spec.IngressClassName = new(r.IngressClassName)
+		}
+		ing.Spec.Rules = []networkingv1.IngressRule{{
+			Host: r.previewHost(environment),
+			IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+				Paths: []networkingv1.HTTPIngressPath{{
+					Path:     "/",
+					PathType: new(networkingv1.PathTypePrefix),
+					Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+						Name: environment.Name,
+						Port: networkingv1.ServiceBackendPort{Name: httpPortName},
+					}},
+				}},
+			}},
+		}}
+
+		return controllerutil.SetControllerReference(environment, ing, r.Scheme)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reconciling Ingress: %w", err)
+	}
+	if op != controllerutil.OperationResultNone {
+		log.Info("Reconciled Ingress", "ingress", ing.Name, "operation", op)
+	}
+
+	return ing, nil
+}
+
+// previewHost is the hostname the preview is served on. The name must be a valid DNS label
+// (at most 63 characters); otherwise the API server rejects the Ingress.
+func (r *PreviewEnvironmentReconciler) previewHost(environment *previewv1alpha1.PreviewEnvironment) string {
+	return environment.Name + "." + r.PreviewDomain
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *PreviewEnvironmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&previewv1alpha1.PreviewEnvironment{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Owns(&networkingv1.Ingress{}).
 		Named("previewenvironment").
 		Complete(r)
 }
