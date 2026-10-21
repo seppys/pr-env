@@ -37,6 +37,7 @@ import (
 
 	previewv1alpha1 "github.com/seppys/pr-env/api/v1alpha1"
 	"github.com/seppys/pr-env/internal/controller"
+	"github.com/seppys/pr-env/internal/githubwebhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -204,6 +205,11 @@ func main() {
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up ready check")
+		os.Exit(1)
+	}
+
+	if err := mgr.Add(githubwebhook.NewServer("127.0.0.1:8090", mgr.GetClient())); err != nil {
+		setupLog.Error(err, "Failed to set up GitHub webhook server")
 		os.Exit(1)
 	}
 
