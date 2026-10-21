@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -101,12 +100,12 @@ var _ = Describe("PreviewEnvironment Controller", func() {
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: key.Name}, ns)).To(Succeed())
 			expectOwnerLabels(ns, key)
 
-			By("Routing <prNumber>-<name>.<preview domain> to the Service, inside the preview namespace")
+			By("Routing <name>.<preview domain> to the Service, inside the preview namespace")
 			ing := &networkingv1.Ingress{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: key.Name, Namespace: ns.Name}, ing)).To(Succeed())
 			expectOwnerLabels(ing, key)
 			Expect(ing.Spec.Rules).To(HaveLen(1))
-			Expect(ing.Spec.Rules[0].Host).To(Equal(fmt.Sprintf("%d-%s.preview.local", testPRNumber, key.Name)))
+			Expect(ing.Spec.Rules[0].Host).To(Equal(key.Name + ".preview.local"))
 			paths := ing.Spec.Rules[0].HTTP.Paths
 			Expect(paths).To(HaveLen(1))
 			Expect(paths[0].Path).To(Equal("/"))

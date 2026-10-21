@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"regexp"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -44,6 +45,9 @@ import (
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
+
+	// dottedIPDomain matches a domain starting with a dotted IPv4 address, like 172.19.0.2.nip.io.
+	dottedIPDomain = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}\.`)
 )
 
 func init() {
@@ -95,6 +99,16 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Wildcard DNS services such as nip.io take the first four dot-separated numbers in the host as
+	// the IP. Preview names end in the PR number, so <name>.172.19.0.2.nip.io would resolve to
+	// 1.172.19.0 for PR 1; the dashed form (172-19-0-2.nip.io) is a single label and can't be misread.
+	if dottedIPDomain.MatchString(previewDomain) {
+		setupLog.Error(nil, "Preview domain starts with a dotted IP, which wildcard DNS services misread "+
+			"because preview names end in a number; write the IP with dashes instead, e.g. 172-19-0-2.nip.io",
+			"preview-domain", previewDomain)
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will

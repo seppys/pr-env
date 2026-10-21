@@ -286,11 +286,11 @@ func previewNamespace(environment *previewv1alpha1.PreviewEnvironment) string {
 	return environment.Name
 }
 
-// previewHost is the hostname the preview is served on: <prNumber>-<name>.<PreviewDomain>.
-// The first label must be a valid DNS label (at most 63 characters); otherwise the API server
-// rejects the Ingress.
+// previewHost is the hostname the preview is served on: <name>.<PreviewDomain>. The name already
+// identifies the PR (the GitHub webhook names it <repo>-pr-<number>) and is a valid DNS label,
+// since it is also used as the preview's namespace.
 func (r *PreviewEnvironmentReconciler) previewHost(environment *previewv1alpha1.PreviewEnvironment) string {
-	return fmt.Sprintf("%d-%s.%s", environment.Spec.PRNumber, environment.Name, r.PreviewDomain)
+	return environment.Name + "." + r.PreviewDomain
 }
 
 // SetupWithManager sets up the controller with the Manager.
