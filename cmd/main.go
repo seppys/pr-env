@@ -68,6 +68,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var previewDomain, ingressClassName string
+	var githubWebhookAddr string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -92,6 +93,8 @@ func main() {
 		"Base domain preview environments are served under, as <name>.<preview-domain>.")
 	flag.StringVar(&ingressClassName, "ingress-class", "",
 		"IngressClass set on preview Ingresses. Leave empty to use the cluster's default IngressClass.")
+	flag.StringVar(&githubWebhookAddr, "github-webhook-bind-address", ":8090",
+		"The address the GitHub webhook endpoint (POST /webhook) binds to.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -222,7 +225,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(githubwebhook.NewServer("127.0.0.1:8090", mgr.GetClient())); err != nil {
+	if err := mgr.Add(githubwebhook.NewServer(githubWebhookAddr, mgr.GetClient())); err != nil {
 		setupLog.Error(err, "Failed to set up GitHub webhook server")
 		os.Exit(1)
 	}
