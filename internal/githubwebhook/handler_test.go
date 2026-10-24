@@ -43,17 +43,28 @@ var _ = Describe("Handler", func() {
 
 	BeforeEach(func() {
 		fetcher = &fakeFetcher{cfg: repoConfig{Image: testImageTemplate, Port: 8080}}
-		handler = &Handler{service: &service{client: k8sClient, namespace: namespace, configs: fetcher}}
+		handler = &Handler{
+			secret:  testSecret,
+			service: &service{client: k8sClient, namespace: namespace, configs: fetcher},
+		}
 	})
 
-	// send posts body as a GitHub webhook delivery of the given event type.
-	send := func(eventType string, body []byte) *httptest.ResponseRecorder {
+	// sendWithSignature posts body as a GitHub webhook delivery with the given signature header.
+	sendWithSignature := func(eventType string, body []byte, signature string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
 		req.Header.Set("X-GitHub-Event", eventType)
 		req.Header.Set("X-GitHub-Delivery", "test-delivery")
+		if signature != "" {
+			req.Header.Set(signatureHeader, signature)
+		}
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		return rec
+	}
+
+	// send posts body as a correctly signed GitHub webhook delivery of the given event type.
+	send := func(eventType string, body []byte) *httptest.ResponseRecorder {
+		return sendWithSignature(eventType, body, sign(testSecret, body))
 	}
 
 	sendEvent := func(e pullRequestEvent) *httptest.ResponseRecorder {
@@ -78,6 +89,43 @@ var _ = Describe("Handler", func() {
 		err := k8sClient.Get(ctx, key, &previewv1alpha1.PreviewEnvironment{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "expected no PreviewEnvironment, got: %v", err)
 	}
+
+	Describe("signature", func() {
+		It("rejects an unsigned delivery without acting on it", func() {
+			key := keyFor(501)
+			body, err := json.Marshal(newEvent(actionOpened, 501, testHeadSHA))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sendWithSignature("pull_request", body, "").Code).To(Equal(http.StatusUnauthorized))
+			expectNoEnvironment(key)
+		})
+
+		It("rejects a delivery signed with another secret", func() {
+			key := keyFor(502)
+			body, err := json.Marshal(newEvent(actionOpened, 502, testHeadSHA))
+			Expect(err).NotTo(HaveOccurred())
+
+			rec := sendWithSignature("pull_request", body, sign([]byte("attacker-secret"), body))
+			Expect(rec.Code).To(Equal(http.StatusUnauthorized))
+			expectNoEnvironment(key)
+		})
+
+		It("rejects a body modified after signing", func() {
+			key := keyFor(503)
+			signed, err := json.Marshal(newEvent(actionOpened, 503, testHeadSHA))
+			Expect(err).NotTo(HaveOccurred())
+			tampered, err := json.Marshal(newEvent(actionOpened, 503, "4444444444444444444444444444444444444444"))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(sendWithSignature("pull_request", tampered, sign(testSecret, signed)).Code).
+				To(Equal(http.StatusUnauthorized))
+			expectNoEnvironment(key)
+		})
+
+		It("checks the signature before routing, so unsigned pings are rejected too", func() {
+			Expect(sendWithSignature("ping", []byte(`{}`), "").Code).To(Equal(http.StatusUnauthorized))
+		})
+	})
 
 	Describe("routing", func() {
 		It("answers GitHub's ping", func() {

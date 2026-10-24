@@ -42,14 +42,14 @@ type Server struct {
 	handler http.Handler
 }
 
-// NewServer returns a Server listening on addr.
-func NewServer(addr string, c client.Client) *Server {
+// NewServer returns a Server listening on addr that only accepts deliveries signed with secret.
+func NewServer(addr string, c client.Client, secret []byte) *Server {
 	svc := &service{
 		client:    c,
 		namespace: namespace,
 		configs:   newRawFetcher(),
 	}
-	handler := &Handler{service: svc}
+	handler := &Handler{secret: secret, service: svc}
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /webhook", handler)

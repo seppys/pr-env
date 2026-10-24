@@ -65,6 +65,14 @@ spec:
           - --health-probe-bind-address=:8081
         image: controller:latest
         name: manager
+        env:
+        # Create it before deploying, with the secret configured in the GitHub webhook:
+        #   kubectl create secret generic pr-env-github-webhook -n pr-env-system --from-literal=secret=<value>
+        - name: GITHUB_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: pr-env-github-webhook
+              key: secret
         ports:
         - containerPort: 8081
           name: health

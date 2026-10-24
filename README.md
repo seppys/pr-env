@@ -88,6 +88,7 @@ kubectl get svc -n traefik traefik   # note the EXTERNAL-IP, e.g. 172.19.0.2
 
 # 3. Install the CRD and run the operator locally
 make install
+export GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)   # the same secret goes in the GitHub webhook
 go run ./cmd/main.go --ingress-class=traefik --preview-domain=172-19-0-2.nip.io
 ```
 
@@ -116,9 +117,9 @@ kubectl get pe -w   # wait for READY True, then open the URL
 
 ### Send a webhook
 
-The receiver listens on `:8090/webhook`. Point a repository's webhook at it through a tunnel such as [smee.io](https://smee.io), with content type `application/json` and only the *Pull requests* event.
+The receiver listens on `:8090/webhook`. Point a repository's webhook at it through a tunnel such as [smee.io](https://smee.io), with content type `application/json`, the value of `GITHUB_WEBHOOK_SECRET` as its secret, and only the *Pull requests* event.
 
-> **Note:** webhook signatures (`X-Hub-Signature-256`) are not verified yet, so don't expose the endpoint publicly. See the [TODO](#todo) list.
+Every delivery must carry a valid `X-Hub-Signature-256` signature made with that secret; anything else is rejected with `401` before it is read.
 
 ## Configuration
 
@@ -127,6 +128,8 @@ The receiver listens on `:8090/webhook`. Point a repository's webhook at it thro
 | `--preview-domain` | `preview.local` | Base domain previews are served under, as `<name>.<preview-domain>` |
 | `--ingress-class` | *(cluster default)* | IngressClass set on preview Ingresses |
 | `--github-webhook-bind-address` | `:8090` | Address of the GitHub webhook endpoint |
+
+The webhook secret is read from the `GITHUB_WEBHOOK_SECRET` environment variable rather than a flag, so it doesn't show up in process listings or the Pod spec. The operator refuses to start without it.
 
 The remaining flags (metrics, health probes, leader election) are the standard controller-runtime ones; run with `--help` to list them.
 
@@ -149,7 +152,6 @@ The controller and the webhook receiver are covered by integration tests that ru
 
 ## TODO
 
-- Verify webhook signatures
 - Ignore pull requests from forks
 - Post the preview URL back to the pull request
 - ResourceQuota, LimitRange and NetworkPolicy per preview

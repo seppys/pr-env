@@ -63,6 +63,12 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
+		By("creating the GitHub webhook secret the manager requires to start")
+		cmd = exec.Command("kubectl", "create", "secret", "generic", "pr-env-github-webhook",
+			"-n", namespace, "--from-literal=secret=e2e-webhook-secret")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create the GitHub webhook secret")
+
 		By("installing CRDs")
 		cmd = exec.Command("make", "install")
 		_, err = utils.Run(cmd)

@@ -50,6 +50,9 @@ var (
 	dottedIPDomain = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}\.`)
 )
 
+// githubWebhookSecretEnv names the environment variable holding the GitHub webhook secret.
+const githubWebhookSecretEnv = "GITHUB_WEBHOOK_SECRET"
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
@@ -110,6 +113,15 @@ func main() {
 		setupLog.Error(nil, "Preview domain starts with a dotted IP, which wildcard DNS services misread "+
 			"because preview names end in a number; write the IP with dashes instead, e.g. 172-19-0-2.nip.io",
 			"preview-domain", previewDomain)
+		os.Exit(1)
+	}
+
+	// The webhook secret is read from the environment, not a flag: flags show up in `ps` and in
+	// the Pod spec. Without it every delivery would be rejected, so fail at startup instead.
+	githubWebhookSecret := []byte(os.Getenv(githubWebhookSecretEnv))
+	if len(githubWebhookSecret) == 0 {
+		setupLog.Error(nil, "GitHub webhook secret is not set; set it to the secret configured in the GitHub webhook",
+			"env", githubWebhookSecretEnv)
 		os.Exit(1)
 	}
 
@@ -225,7 +237,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(githubwebhook.NewServer(githubWebhookAddr, mgr.GetClient())); err != nil {
+	if err := mgr.Add(githubwebhook.NewServer(githubWebhookAddr, mgr.GetClient(), githubWebhookSecret)); err != nil {
 		setupLog.Error(err, "Failed to set up GitHub webhook server")
 		os.Exit(1)
 	}

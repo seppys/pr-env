@@ -14,6 +14,8 @@ const (
 )
 
 type Handler struct {
+	// secret is the webhook secret configured in GitHub, used to verify every delivery.
+	secret  []byte
 	service *service
 }
 
@@ -23,6 +25,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Verified before anything else reads the body: until then it is untrusted input.
+	if err := verifySignature(h.secret, body, r.Header.Get(signatureHeader)); err != nil {
+		log.Info("Rejected webhook delivery", "reason", err.Error())
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
 
